@@ -1,0 +1,7 @@
+{
+  "rust-analyzer.cargo.allTargets": false,
+  "rust-analyzer.linkedProjects": [
+        "embedded/Cargo.toml",
+        "server/Cargo.toml"
+    ]
+}

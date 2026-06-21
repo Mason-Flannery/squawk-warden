@@ -1,0 +1,4 @@
+[env]
+WIFI_SSID = "YourSSID"
+WIFI_PASSWORD = "YourPassword"
+SERVER_URL = "http://192.168.x.x:port/readings"
