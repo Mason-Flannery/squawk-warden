@@ -7,17 +7,14 @@
 )]
 #![deny(clippy::large_stack_frames)]
 
-use dht_sensor::dht22;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use esp_hal::clock::CpuClock;
-use esp_hal::gpio::{Output, OutputConfig};
 use esp_hal::timer::timg::TimerGroup;
-use core::fmt::Write;
-use reqwless::request::RequestBuilder;
 use esp_hal::delay::Delay;
 use esp_println;
-use embassy_net;
+use shared::Reading as SensorReading;
+use reqwless::request::RequestBuilder;
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
@@ -58,7 +55,7 @@ async fn main(spawner: Spawner) -> ! {
         esp_hal::interrupt::software::SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
     esp_rtos::start(timg0.timer0, sw_interrupt.software_interrupt0);
 
-    let (mut _wifi_controller, _interfaces) =
+    let (mut wifi_controller, interfaces) =
         esp_radio::wifi::new(peripherals.WIFI, Default::default())
             .expect("Failed to initialize Wi-Fi controller");
 
@@ -68,7 +65,7 @@ async fn main(spawner: Spawner) -> ! {
         .with_password(env!("WIFI_PASSWORD").into()),
     );
 
-    match _wifi_controller.set_config(&station_config) {
+    match wifi_controller.set_config(&station_config) {
         Ok(_) => (),
         Err(e) => esp_println::println!("Error setting config: {:?}", e),
     }
@@ -80,20 +77,13 @@ async fn main(spawner: Spawner) -> ! {
 
     // Init network stack
     let (stack, runner) = embassy_net::new(
-        _interfaces.station,
+        interfaces.station,
         wifi_config,
         mk_static!(embassy_net::StackResources<3>, embassy_net::StackResources::<3>::new()),
         seed
     );
 
-    esp_println::println!("Scan");
-    let scan_config = esp_radio::wifi::scan::ScanConfig::default().with_max(10);
-    let result = _wifi_controller.scan_async(&scan_config).await.unwrap();
-    for ap in result {
-        esp_println::println!("{:?}", ap);
-    }
-
-    spawner.spawn(connection(_wifi_controller).unwrap());
+    spawner.spawn(connection(wifi_controller).unwrap());
     spawner.spawn(net_task(runner).unwrap());
 
     stack.wait_config_up().await;
@@ -122,23 +112,23 @@ async fn main(spawner: Spawner) -> ! {
     dht22_sensor.set_input_enable(true);
     dht22_sensor.set_output_enable(true);
     dht22_sensor.set_high();
+    let mut client = reqwless::client::HttpClient::new(&tcp_client, &dns_client);
+    let mut buf = [0u8; 128];
+    let mut rx_buf = [0u8; 4096];
     
     loop {
         Timer::after(Duration::from_secs(3)).await;
         match dht_sensor::dht22::blocking::read(&mut delay, &mut dht22_sensor) {
-            Ok(read) => {
-                esp_println::println!("Temp: {}, Humidity: {}", read.temperature, read.relative_humidity);
-                let mut client = reqwless::client::HttpClient::new(&tcp_client, &dns_client);
-                let mut rx_buf = [0u8; 4096];
+            Ok(sensor_read) => {
+                let sensor_read = SensorReading {temperature: sensor_read.temperature, humidity: sensor_read.relative_humidity};
+                esp_println::println!("Temp: {}, Humidity: {}", sensor_read.temperature, sensor_read.humidity);
                 match embassy_time::with_timeout(Duration::from_secs(5), client
                     .request(reqwless::request::Method::POST, env!("SERVER_URL")))
                     .await {
                         Ok(Ok(builder)) => {
-                            let mut body: heapless::String<64> =  heapless::String::new();
-                            write!(body, "{{\"temp\":{},\"humidity\":{}}}", read.temperature, read.relative_humidity).unwrap();
-
+                            let len = serde_json_core::to_slice(&sensor_read, &mut buf).unwrap();
                             match builder
-                            .body(body.as_bytes())
+                            .body(&buf[..len])
                             .content_type(reqwless::headers::ContentType::ApplicationJson)
                             .send(&mut rx_buf)
                             .await {

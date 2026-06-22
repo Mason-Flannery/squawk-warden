@@ -8,6 +8,8 @@ name = "squawk-warden"
 path = "./src/bin/main.rs"
 
 [dependencies]
+shared = { path = "../shared" }
+
 esp-hal = { version = "~1.1.1", features = ["esp32c3", "unstable"] }
 
 esp-rtos = { version = "0.3.0", features = [
@@ -52,6 +54,7 @@ dht-sensor = { version = "0.3.0", features = ["async", "embedded-hal-async"] }
 esp-backtrace = { version = "0.19.0", features = ["esp32c3", "panic-handler", "println"] }
 reqwless = { version = "0.14.0", default-features = false }
 heapless = "0.9.3"
+serde-json-core = "0.6.0"
 
 
 # For fine tuning these settings, please refer to https://doc.rust-lang.org/cargo/reference/profiles.html

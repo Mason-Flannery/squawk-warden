@@ -1,6 +1,8 @@
+#![no_std]
+use serde::{Serialize, Deserialize};
 
-
-#[cfg(test)]
-mod tests {
-    use super::*;
+#[derive(Serialize, Deserialize, Clone)]
+pub struct Reading {
+    pub temperature: f32,
+    pub humidity: f32,
 }
