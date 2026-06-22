@@ -50,6 +50,8 @@ async fn main(spawner: Spawner) -> ! {
 
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 66320);
 
+    const FULL_SERVER_URL: &str = concat!(env!("SERVER_URL"), "/readings/submit");
+
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     let sw_interrupt =
         esp_hal::interrupt::software::SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
@@ -123,7 +125,7 @@ async fn main(spawner: Spawner) -> ! {
                 let sensor_read = SensorReading {temperature: sensor_read.temperature, humidity: sensor_read.relative_humidity};
                 esp_println::println!("Temp: {}, Humidity: {}", sensor_read.temperature, sensor_read.humidity);
                 match embassy_time::with_timeout(Duration::from_secs(5), client
-                    .request(reqwless::request::Method::POST, env!("SERVER_URL")))
+                    .request(reqwless::request::Method::POST, FULL_SERVER_URL))
                     .await {
                         Ok(Ok(builder)) => {
                             let len = serde_json_core::to_slice(&sensor_read, &mut buf).unwrap();
