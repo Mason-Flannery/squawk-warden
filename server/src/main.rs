@@ -21,7 +21,7 @@ async fn main() {
 
 async fn latest_handler(State(state): State<Arc<Mutex<Reading>>>) -> String {
     let reading = state.lock().await;
-    serde_json::to_string(&*reading).unwrap()
+    format!("Temperature: {}F, Relative Humidity: {}%", reading.temperature*1.8+32.0, reading.humidity)
 }
 #[axum::debug_handler]
 async fn submit_handler(State(state): State<Arc<Mutex<Reading>>>, Json(payload): Json<Reading>) {
