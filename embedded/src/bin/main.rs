@@ -74,6 +74,7 @@ async fn main(spawner: Spawner) -> ! {
 
     esp_println::println!("Wifi configured and started!");
     let wifi_config = embassy_net::Config::dhcpv4(Default::default());
+    wifi_controller.set_power_saving(esp_radio::wifi::PowerSaveMode::Minimum);
     let rng: esp_hal::rng::Rng = esp_hal::rng::Rng::new();
     let seed = (rng.random() as u64) << 32 | rng.random() as u64;
 
@@ -84,7 +85,7 @@ async fn main(spawner: Spawner) -> ! {
         mk_static!(embassy_net::StackResources<3>, embassy_net::StackResources::<3>::new()),
         seed
     );
-
+    
     spawner.spawn(connection(wifi_controller).unwrap());
     spawner.spawn(net_task(runner).unwrap());
 
@@ -119,7 +120,7 @@ async fn main(spawner: Spawner) -> ! {
     let mut rx_buf = [0u8; 4096];
     
     loop {
-        Timer::after(Duration::from_secs(3)).await;
+        Timer::after(Duration::from_secs(30)).await;
         match dht_sensor::dht22::blocking::read(&mut delay, &mut dht22_sensor) {
             Ok(sensor_read) => {
                 let sensor_read = SensorReading {temperature: sensor_read.temperature, humidity: sensor_read.relative_humidity};
