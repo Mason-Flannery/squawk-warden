@@ -19,13 +19,14 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 
-async fn latest_handler(State(state): State<Arc<Mutex<Reading>>>) -> String {
+async fn latest_handler(State(state): State<Arc<Mutex<Reading>>>) -> Json<Reading> {
     let reading = state.lock().await;
-    format!("Temperature: {}F, Relative Humidity: {}%", reading.temperature*1.8+32.0, reading.humidity)
+    // format!("Temperature: {}F, Relative Humidity: {}%", reading.temperature*1.8+32.0, reading.humidity)
+    Json(reading.clone())
 }
 #[axum::debug_handler]
 async fn submit_handler(State(state): State<Arc<Mutex<Reading>>>, Json(payload): Json<Reading>) {
     let mut reading = state.lock().await;
     *reading = payload;
-    println!("New reading is: {} {}", reading.temperature, reading.humidity);
+    println!("New reading is: {} {}", reading.temperature, reading.humidity); 
 }
