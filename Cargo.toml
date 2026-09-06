@@ -1,6 +1,6 @@
 [workspace]
 members = [
     "embedded",
-    "server",
+    "server", "shared",
 ]
 resolver = "2"
