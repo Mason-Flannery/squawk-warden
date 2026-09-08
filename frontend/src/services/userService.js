@@ -1,3 +1,7 @@
+
+const coopLocation = "39.560676588034035, -84.40952047456152"
+
+
 async function getData() {
   const url = "http://192.168.8.110:3000/readings/latest";
   try {

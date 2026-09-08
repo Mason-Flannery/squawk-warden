@@ -7,4 +7,11 @@
     --color-sunrise-left-blue: #B3AECA;
     --color-sunrise-center-pink: #E1A9AC;
     --color-sunrise-right-yellow: #E9E0B0;
+
+    --color-daytime-left-blue: #2980B9;
+    --color-daytime-center-blue: #6DD5FA;
+    --color-daytime-right-white: #FFFFFF;
+
+    --color-evening-left-navy: #2d2696;
+    --color-evening-right-purple: #7746bd;
 }

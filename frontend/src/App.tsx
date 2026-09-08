@@ -8,14 +8,16 @@ import "./App.css";
 const gradients = {
   morning:
     "bg-linear-to-br from-sunrise-left-blue via-sunrise-center-pink to-sunrise-right-yellow min-h-screen",
-  afternoon: "idk",
-  evening: "idk",
+  afternoon:
+    "bg-linear-to-br from-daytime-left-blue via-daytime-center-blue to-daytime-right-white min-h-screen",
+  evening:
+    "bg-linear-to-t from-evening-left-navy to-evening-right-purple min-h-screen",
   night: "idk",
 };
 
 function App() {
   return (
-    <div className="bg-linear-to-br from-sunrise-left-blue via-sunrise-center-pink to-sunrise-right-yellow min-h-screen">
+    <div className="bg-linear-to-br from-daytime-left-blue via-daytime-center-blue to-daytime-right-white min-h-screen">
       <div className="grid grid-cols-3 gap-3">
         <div>
           <Card
