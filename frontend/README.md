@@ -1,73 +1,52 @@
-# React + TypeScript + Vite
+# Climate Station frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A small React dashboard for the temperature/humidity sensor: a live readout up
+top, and a history chart below.
 
-Currently, two official plugins are available:
+## Run it
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm install
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+Opens on http://localhost:5173. It talks to the axum server at
+`http://localhost:3000` by default — copy `.env.example` to `.env` and change
+`VITE_API_BASE_URL` if your server lives somewhere else.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## What it needs from the backend
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+- `GET /readings/latest` — already exists, returns one `Reading` as JSON (or
+  204/404-ish when the table is empty — the frontend treats "not ok" as "no
+  data yet").
+- `GET /readings/history?limit=N` — **new**, needed for the chart. See
+  `backend-additions.md` in this folder for the Rust code to add.
+- CORS enabled for the frontend's origin (`http://localhost:5173` in dev),
+  otherwise the browser will block the requests. Also covered in
+  `backend-additions.md`.
+
+## Range options assume one reading per minute
+
+The 1h / 6h / 24h / 3d buttons are just reading counts under the hood (60,
+360, 1440, 4320) — they only line up with real time spans because the sensor
+logs once a minute. If you ever change the collection interval, update the
+`value`s in `src/components/RangeControl.jsx` to match, or swap the history
+endpoint to filter by an actual timestamp range instead of a row count once
+the timestamp column is confirmed reliable (see below).
+
+## About the timestamp
+
+`new_reading` doesn't pass a timestamp to the `INSERT`, so it only gets a real
+value if the `readings` table's `timestamp` column has a
+`DEFAULT CURRENT_TIMESTAMP` (or similar) in the schema. If it doesn't, every
+row's timestamp will be `NULL` or empty.
+
+The chart handles this defensively: if timestamps are missing or all
+identical, it falls back to plotting by reading order and shows a small note
+so it's obvious something's off. Worth double-checking the actual
+`CREATE TABLE readings` statement (not shown in what was shared) to confirm
+the column has that default — or just query the table directly:
+
+```bash
+sqlite3 your.db "SELECT id, timestamp FROM readings ORDER BY id DESC LIMIT 5;"
 ```
