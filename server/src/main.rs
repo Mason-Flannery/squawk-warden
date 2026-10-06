@@ -6,18 +6,22 @@ use dotenvy::dotenv;
 use serde::Deserialize;
 use shared::Reading;
 use sqlx::SqlitePool;
+use tower_http::services::ServeDir;
+use tower_http::cors::{Any, CorsLayer};
 
 #[tokio::main]
 async fn main() {
     let _ = dotenv(); // Load environment variables 
+    let cors = CorsLayer::new().allow_origin(Any).allow_methods(Any);
 
     let latest = db::init().await;
     let app = Router::new()
-        .route("/", get(|| async { "Hello, World!" }))
         .route("/readings/latest", get(latest_handler))
         .route("/readings/submit", post(submit_handler))
         .route("/readings/history", get(history_handler))
-        .with_state(latest);
+        .fallback_service(ServeDir::new("../frontend/dist"))
+        .with_state(latest)
+        .layer(cors);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap(); // TODO: Bind to server port defined in config.toml?
 
