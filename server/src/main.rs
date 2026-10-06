@@ -17,6 +17,7 @@ async fn main() {
         .route("/", get(|| async { "Hello, World!" }))
         .route("/readings/latest", get(latest_handler))
         .route("/readings/submit", post(submit_handler))
+        .route("/readings/history", get(history_handler))
         .with_state(latest);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap(); // TODO: Bind to server port defined in config.toml?
@@ -47,5 +48,20 @@ async fn submit_handler(State(state): State<SqlitePool>, Json(payload): Json<Rea
             "New reading is: {} {}",
             payload.temperature, payload.humidity
         );
+    }
+}
+
+#[derive(Deserialize)]
+pub struct HistoryParams {
+    limit: Option<i64>,
+}
+async fn history_handler(
+    State(db): State<SqlitePool>,
+    Query(params): Query<HistoryParams>,
+) -> impl IntoResponse {
+    let limit = params.limit.unwrap_or(200).clamp(1, 5000);
+    match db::get_history(&db, limit).await {
+        Ok(readings) => (StatusCode::OK, Json(readings)).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
