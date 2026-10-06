@@ -120,7 +120,7 @@ async fn main(spawner: Spawner) -> ! {
     let mut rx_buf = [0u8; 4096];
     
     loop {
-        Timer::after(Duration::from_secs(30)).await;
+        Timer::after(Duration::from_secs(60)).await;
         match dht_sensor::dht22::blocking::read(&mut delay, &mut dht22_sensor) {
             Ok(sensor_read) => {
                 let sensor_read = SensorReading {temperature: sensor_read.temperature, humidity: sensor_read.relative_humidity};
