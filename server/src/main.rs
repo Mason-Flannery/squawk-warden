@@ -1,10 +1,9 @@
-pub mod db;
+mod db;
 use axum::{
-    Json, Router,
-    extract::State,
-    routing::{get, post},
+    Json, Router, extract::{Query, State}, http::StatusCode, response::IntoResponse, routing::{get, post},
 };
 use dotenvy::dotenv;
+use serde::Deserialize;
 use shared::Reading;
 use sqlx::SqlitePool;
 
@@ -25,18 +24,11 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 
-async fn latest_handler(State(state): State<SqlitePool>) -> Json<Reading> {
-    if let Ok(Some(reading)) = db::get_latest(&state).await {
-        Json(Reading {
-            temperature: reading.temperature,
-            humidity: reading.humidity,
-        })
-    } else {
-        // Lazy approach, need to propagate errors once frontend is skeletonized
-        Json(Reading {
-            temperature: -1.0,
-            humidity: -1.0,
-        })
+async fn latest_handler(State(state): State<SqlitePool>) -> impl IntoResponse {
+    match db::get_latest(&state).await {
+        Ok(Some(reading)) => Json(reading).into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "no readings yet").into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
 #[axum::debug_handler]
