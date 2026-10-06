@@ -39,8 +39,7 @@ pub async fn get_latest(db: &SqlitePool) -> Result<Option<Reading>, sqlx::Error>
             LIMIT 1;",
     )
     .fetch_optional(db)
-    .await
-    .expect("We should be able to create a table");
+    .await?;
 
     Ok(reading)
 }
@@ -64,7 +63,21 @@ pub async fn new_reading(
     Ok(())
 }
 
-#[derive(sqlx::FromRow, Debug, Clone)]
+pub async fn get_history(db: &SqlitePool, limit: i64) -> Result<Vec<Reading>, sqlx::Error> {
+    let readings = sqlx::query_as::<_, Reading>(
+        "SELECT id, timestamp, temperature, humidity
+            FROM readings
+            ORDER BY id DESC
+            LIMIT ?;",
+    )
+    .bind(limit)
+    .fetch_all(db)
+    .await?;
+
+    Ok(readings)
+}
+
+#[derive(sqlx::FromRow, Debug, Clone, serde::Serialize)]
 pub struct Reading {
     pub id: i64,
     pub timestamp: String, // or sqlx::types::time/chrono types if you prefer
