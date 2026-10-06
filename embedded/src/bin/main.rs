@@ -121,6 +121,7 @@ async fn main(spawner: Spawner) -> ! {
     
     loop {
         Timer::after(Duration::from_secs(60)).await;
+        // Telemetry, TODO: Rewrite into an async task once I get a second c3 for testing, keeping sync for stability
         match dht_sensor::dht22::blocking::read(&mut delay, &mut dht22_sensor) {
             Ok(sensor_read) => {
                 let sensor_read = SensorReading {temperature: sensor_read.temperature, humidity: sensor_read.relative_humidity};
@@ -148,6 +149,8 @@ async fn main(spawner: Spawner) -> ! {
                 esp_println::println!("DHT22 error: {:?}", e);
             }
         }
+        // Check door, TODO: Rewrite into an async task once I get a second c3 for testing, keeping sync for stability
+        
     }
 
     // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v1.1.0/examples
