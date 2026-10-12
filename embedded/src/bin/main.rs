@@ -42,13 +42,11 @@ macro_rules! mk_static {
 )]
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
-    // generator version: 1.3.0
-    // generator parameters: --chip esp32c3 -o alloc -o unstable-hal -o wifi -o embassy -o vscode
     
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
 
-    esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 66320);
+    esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 65000);
 
     const FULL_SERVER_URL: &str = concat!(env!("SERVER_URL"), "/readings/submit");
 
