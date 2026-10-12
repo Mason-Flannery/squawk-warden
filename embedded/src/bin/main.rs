@@ -111,7 +111,7 @@ async fn main(spawner: Spawner) -> ! {
     delay.delay_millis(2000);
 
     // let _ = spawner;
-    let mut dht22_sensor = esp_hal::gpio::Flex::new(peripherals.GPIO3);
+    let mut dht22_sensor = esp_hal::gpio::Flex::new(peripherals.GPIO10);
     dht22_sensor.set_input_enable(true);
     dht22_sensor.set_output_enable(true);
     dht22_sensor.set_high();
