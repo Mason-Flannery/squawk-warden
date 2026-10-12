@@ -1,4 +1,4 @@
-[target.riscv32imc-unknown-none-elf]
+[target.riscv32imac-unknown-none-elf]
 runner = "espflash flash --monitor --chip esp32c3"
 
 [build]
@@ -8,7 +8,7 @@ rustflags = [
   "-C", "force-frame-pointers",
 ]
 
-target = "riscv32imc-unknown-none-elf"
+target = "riscv32imac-unknown-none-elf"
 
 [unstable]
 build-std = ["alloc", "core"]
