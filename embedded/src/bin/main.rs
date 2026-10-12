@@ -7,14 +7,16 @@
 )]
 #![deny(clippy::large_stack_frames)]
 
-use embassy_executor::Spawner;
-use embassy_time::{Duration, Timer};
+use embassy_executor::{Spawner};
+use embassy_net::{dns::DnsSocket, tcp::client::{TcpClient, TcpClientState}};
+use embassy_time::{Duration, Timer, with_timeout};
 use esp_hal::clock::CpuClock;
 use esp_hal::timer::timg::TimerGroup;
-use esp_hal::delay::Delay;
 use esp_println;
+use reqwless::{client::HttpClient, headers::ContentType};
 use shared::Reading as SensorReading;
-use reqwless::request::RequestBuilder;
+use reqwless::request::{Method, RequestBuilder};
+use static_cell::{StaticCell};
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
@@ -27,14 +29,17 @@ extern crate alloc;
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
 esp_bootloader_esp_idf::esp_app_desc!();
 
-macro_rules! mk_static {
-    ($t:ty,$val:expr) => {{
-        static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
-        #[deny(unused_attributes)]
-        let x = STATIC_CELL.uninit().write(($val));
-        x
-    }};
-}
+// Network Statics
+static TCP_CLIENT_STATE: StaticCell<TcpClientState<1, 1500, 1500>> = StaticCell::new();
+static TCP_CLIENT: StaticCell<TcpClient<'_, 1, 1500, 1500>> = StaticCell::new();
+static DNS_CLIENT: StaticCell<DnsSocket<'_>> = StaticCell::new();
+static STACK_RESOURCES: StaticCell<embassy_net::StackResources<3>> = StaticCell::new();
+
+// Constants
+const POLL_INTERVAL: Duration = Duration::from_secs(60);
+const RETRY_INTERVAL: Duration = Duration::from_secs(2);
+const NET_TIMEOUT: Duration = Duration::from_secs(5);
+const FULL_SERVER_URL: &str = concat!(env!("SERVER_URL"), "/readings/submit");
 
 #[allow(
     clippy::large_stack_frames,
@@ -42,13 +47,11 @@ macro_rules! mk_static {
 )]
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
-    
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
 
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 65000);
 
-    const FULL_SERVER_URL: &str = concat!(env!("SERVER_URL"), "/readings/submit");
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     let sw_interrupt =
@@ -72,7 +75,7 @@ async fn main(spawner: Spawner) -> ! {
 
     esp_println::println!("Wifi configured and started!");
     let wifi_config = embassy_net::Config::dhcpv4(Default::default());
-    wifi_controller.set_power_saving(esp_radio::wifi::PowerSaveMode::Minimum);
+    let _ = wifi_controller.set_power_saving(esp_radio::wifi::PowerSaveMode::Minimum);
     let rng: esp_hal::rng::Rng = esp_hal::rng::Rng::new();
     let seed = (rng.random() as u64) << 32 | rng.random() as u64;
 
@@ -80,10 +83,10 @@ async fn main(spawner: Spawner) -> ! {
     let (stack, runner) = embassy_net::new(
         interfaces.station,
         wifi_config,
-        mk_static!(embassy_net::StackResources<3>, embassy_net::StackResources::<3>::new()),
-        seed
+        STACK_RESOURCES.init(embassy_net::StackResources::<3>::new()),
+        seed,
     );
-    
+
     spawner.spawn(connection(wifi_controller).unwrap());
     spawner.spawn(net_task(runner).unwrap());
 
@@ -94,61 +97,26 @@ async fn main(spawner: Spawner) -> ! {
     }
 
     // Init HTTP client
-    let tcp_client = embassy_net::tcp::client::TcpClient::new(
+    let tcp_client_state = TCP_CLIENT_STATE.init(embassy_net::tcp::client::TcpClientState::<1,1500,1500>::new());
+    let tcp_client = TCP_CLIENT.init(embassy_net::tcp::client::TcpClient::new(
         stack,
-        mk_static!(
-            embassy_net::tcp::client::TcpClientState<1,1500,1500> ,
-            embassy_net::tcp::client::TcpClientState::<1,1500,1500>::new()
-        ),
-    );
-    let dns_client = embassy_net::dns::DnsSocket::new(stack);
+        tcp_client_state,
+    ));
+    let dns_client = DNS_CLIENT.init(embassy_net::dns::DnsSocket::new(stack));
     
+    // Output NEEDS to be open drain
+    let pin_cfg = esp_hal::gpio::OutputConfig::default().with_drive_mode(esp_hal::gpio::DriveMode::OpenDrain);
+    let mut dht22_pin = esp_hal::gpio::Flex::new(peripherals.GPIO18);
+    dht22_pin.apply_output_config(&pin_cfg);
 
-    // TODO: Spawn some tasks
-    let mut delay = Delay::new();
-    delay.delay_millis(2000);
+    dht22_pin.set_input_enable(true);
+    dht22_pin.set_output_enable(true);
+    dht22_pin.set_high();
 
-    // let _ = spawner;
-    let mut dht22_sensor = esp_hal::gpio::Flex::new(peripherals.GPIO10);
-    dht22_sensor.set_input_enable(true);
-    dht22_sensor.set_output_enable(true);
-    dht22_sensor.set_high();
-    let mut client = reqwless::client::HttpClient::new(&tcp_client, &dns_client);
-    let mut buf = [0u8; 128];
-    let mut rx_buf = [0u8; 4096];
-    
+    spawner.spawn(dht_task(dht22_pin, &*tcp_client, &*dns_client).expect("Should work"));
     loop {
-        Timer::after(Duration::from_secs(60)).await;
-        match dht_sensor::dht22::blocking::read(&mut delay, &mut dht22_sensor) {
-            Ok(sensor_read) => {
-                let sensor_read = SensorReading {temperature: sensor_read.temperature, humidity: sensor_read.relative_humidity};
-                esp_println::println!("Temp: {}, Humidity: {}", sensor_read.temperature, sensor_read.humidity);
-                match embassy_time::with_timeout(Duration::from_secs(5), client
-                    .request(reqwless::request::Method::POST, FULL_SERVER_URL))
-                    .await {
-                        Ok(Ok(builder)) => {
-                            let len = serde_json_core::to_slice(&sensor_read, &mut buf).unwrap();
-                            match builder
-                            .body(&buf[..len])
-                            .content_type(reqwless::headers::ContentType::ApplicationJson)
-                            .send(&mut rx_buf)
-                            .await {
-                                Ok(_) => esp_println::println!("Posted successfully"),
-                                Err(e) => esp_println::println!("Error sending: {}", e),
-                            }
-                        },
-                        Ok(Err(e)) => esp_println::println!("Request error: {:?}", e),
-                        Err(_) => esp_println::println!("Request timed out"),
-                    }
-
-            },
-            Err(e) => {
-                esp_println::println!("DHT22 error: {:?}", e);
-            }
-        }
+        embassy_time::Timer::after_secs(1).await; // Yield control to let other tasks start
     }
-
-    // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v1.1.0/examples
 }
 
 
@@ -179,4 +147,61 @@ async fn connection(mut controller: esp_radio::wifi::WifiController<'static>) {
 #[embassy_executor::task]
 async fn net_task(mut runner: embassy_net::Runner<'static, esp_radio::wifi::Interface<'static>>) {
     runner.run().await
+}
+
+#[embassy_executor::task]
+pub async fn dht_task(mut pin: esp_hal::gpio::Flex<'static>,
+    tcp_client: &'static TcpClient<'static, 1, 1500, 1500>,
+    dns_socket: &'static DnsSocket<'static>, // Adjust network type
+) {    
+    esp_println::println!("hello");
+    let mut client = HttpClient::new(tcp_client, dns_socket);
+
+    let mut buf = [0u8; 128];
+    let mut rx_buf = [0u8; 4096];
+
+    let mut delay = embassy_time::Delay;
+    Timer::after_secs(2).await; // Give 2 seconds for the sensor to warm up
+    loop {
+        let sensor_read = match dht_sensor::dht22::r#async::read(&mut delay, &mut pin).await {
+            Ok(sensor_read) => SensorReading{temperature: sensor_read.temperature, humidity: sensor_read.relative_humidity},
+            Err(e) => {
+                esp_println::println!("DHT22 error: {:?}", e);
+                Timer::after(RETRY_INTERVAL).await;
+                continue; // Try again after interval
+            }
+        };
+        
+        let dht_future = send_dht(&mut client, &sensor_read, &mut buf, &mut rx_buf);
+        match with_timeout(NET_TIMEOUT, dht_future).await {
+            Ok(Ok(_)) => esp_println::println!("Posted successfully!"),
+            Ok(Err(_)) => esp_println::println!("HTTP post failed :("),
+            Err(_) => esp_println::println!("Request timed out"),
+        }
+
+        Timer::after(POLL_INTERVAL).await;
+    }
+}
+
+async fn send_dht(
+    client: &mut HttpClient<'_, TcpClient<'_, 1, 1500, 1500>, DnsSocket<'_>>,
+    sensor_read: &SensorReading,
+    buf: &mut [u8],
+    rx_buf: &mut [u8]
+) -> Result<(), ()> {
+    let len = serde_json_core::to_slice(&sensor_read, buf).map_err(|_| ())?;
+
+    let builder = client
+    .request(Method::POST, FULL_SERVER_URL)
+    .await
+    .map_err(|_| ())?;
+
+    builder
+        .body(&buf[..len])
+        .content_type(ContentType::ApplicationJson)
+        .send(rx_buf)
+        .await
+        .map_err(|_| ())?;
+
+    Ok(())
 }
