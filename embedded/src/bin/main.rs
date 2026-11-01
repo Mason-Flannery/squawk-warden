@@ -15,6 +15,8 @@ use esp_hal::timer::timg::TimerGroup;
 use esp_println;
 use reqwless::{client::HttpClient, headers::ContentType};
 use shared::Reading as SensorReading;
+use shared::DoorCommand;
+use shared::CommandAck;
 use reqwless::request::{Method, RequestBuilder};
 use static_cell::{StaticCell};
 
@@ -39,7 +41,10 @@ static STACK_RESOURCES: StaticCell<embassy_net::StackResources<3>> = StaticCell:
 const POLL_INTERVAL: Duration = Duration::from_secs(60);
 const RETRY_INTERVAL: Duration = Duration::from_secs(2);
 const NET_TIMEOUT: Duration = Duration::from_secs(5);
-const FULL_SERVER_URL: &str = concat!(env!("SERVER_URL"), "/readings/submit");
+
+const SUBMIT_READING_ROUTE: &str = concat!(env!("SERVER_URL"), "/readings/submit");
+const GET_DOOR_COMMAND_ROUTE: &str = concat!(env!("SERVER_URL"), "/commands/door/");
+const FULL_DOOR_ACK_ROUTE: &str = concat!(env!("SERVER_URL"), "/commands/door/ack");
 
 #[allow(
     clippy::large_stack_frames,
@@ -152,7 +157,7 @@ async fn net_task(mut runner: embassy_net::Runner<'static, esp_radio::wifi::Inte
 #[embassy_executor::task]
 pub async fn dht_task(mut pin: esp_hal::gpio::Flex<'static>,
     tcp_client: &'static TcpClient<'static, 1, 1500, 1500>,
-    dns_socket: &'static DnsSocket<'static>, // Adjust network type
+    dns_socket: &'static DnsSocket<'static>,
 ) {    
     esp_println::println!("hello");
     let mut client = HttpClient::new(tcp_client, dns_socket);
@@ -191,13 +196,106 @@ async fn send_dht(
 ) -> Result<(), ()> {
     let len = serde_json_core::to_slice(&sensor_read, buf).map_err(|_| ())?;
 
-    let builder = client
-    .request(Method::POST, FULL_SERVER_URL)
+    let request = client
+    .request(Method::POST, SUBMIT_READING_ROUTE)
     .await
     .map_err(|_| ())?;
 
-    builder
+    request
         .body(&buf[..len])
+        .content_type(ContentType::ApplicationJson)
+        .send(rx_buf)
+        .await
+        .map_err(|_| ())?;
+
+    Ok(())
+}
+
+async fn door_poll_task(
+    tcp_client: &'static TcpClient<'static, 1, 1500, 1500>,
+    dns_socket: &'static DnsSocket<'static>,
+    rx_buf: &'static mut [u8],
+) {
+    let last_command_id = 0;
+    // define id guard? store last issued id and if the server has a duplicate, skip action and then ack that it was done? this state protects signal drops mid-op
+    let mut client = HttpClient::new(tcp_client, dns_socket);
+    loop {
+        // Make a get request to get the command json
+        let door_future = fetch_door_command(&mut client, rx_buf);
+        let command = match with_timeout(NET_TIMEOUT, door_future).await {
+            Ok(Ok(command)) => {
+                esp_println::println!("GET successful");
+                command
+            },
+            Ok(Err(_)) => {
+                esp_println::println!("HTTP get failed :(");
+                Timer::after(POLL_INTERVAL).await;
+                continue;
+            },
+            Err(_) => {
+                esp_println::println!("Request timed out");
+                Timer::after(POLL_INTERVAL).await;
+                continue;
+            },
+        };
+        
+        match command.action {
+            shared::DoorAction::None => (),
+            shared::DoorAction::Open => {
+                // Open logic
+
+                ack_door_command(&mut client, command.id, rx_buf).await;
+            },
+            shared::DoorAction::Close => {
+                // Close logic
+
+                ack_door_command(&mut client, command.id, rx_buf).await;
+            },
+        }
+
+        // Ack server
+
+        Timer::after(POLL_INTERVAL).await;
+    }
+}
+
+async fn fetch_door_command(
+    client: &mut HttpClient<'_, TcpClient<'_, 1, 1500, 1500>, DnsSocket<'_>>,
+    rx_buf: &mut [u8],
+) -> Result<DoorCommand, ()> {
+    let mut request = client
+        .request(Method::GET, GET_DOOR_COMMAND_ROUTE)
+        .await
+        .map_err(|_| ())?;
+
+    let response = request.send(rx_buf).await.map_err(|_| ())?;
+
+    if !response.status.is_successful() {
+        esp_println::println!("Bad status: {:?}", response.status);
+        return Err(());
+    }
+
+    let body = response.body().read_to_end().await.map_err(|_| ())?;
+
+    let (cmd, _len) = serde_json_core::from_slice::<DoorCommand>(body).map_err(|_| ())?;
+    Ok(cmd)
+}
+
+async fn ack_door_command(
+    client: &mut HttpClient<'_, TcpClient<'_, 1, 1500, 1500>, DnsSocket<'_>>,
+    id: u32,
+    rx_buf: &mut [u8],
+) -> Result<(), ()> {
+    let mut body = [0u8; 32]; // request body, separate from rx_buf
+    let len = serde_json_core::to_slice(&CommandAck { id }, &mut body).map_err(|_| ())?;
+
+    let builder = client
+        .request(Method::POST, FULL_DOOR_ACK_ROUTE)
+        .await
+        .map_err(|_| ())?;
+
+    builder
+        .body(&body[..len])
         .content_type(ContentType::ApplicationJson)
         .send(rx_buf)
         .await

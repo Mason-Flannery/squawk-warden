@@ -4,21 +4,25 @@ use axum::{
 };
 use dotenvy::dotenv;
 use serde::Deserialize;
-use shared::Reading;
+use shared::{DoorAction, DoorCommand, Reading};
 use sqlx::SqlitePool;
 use tower_http::services::ServeDir;
 use tower_http::cors::{Any, CorsLayer};
+use rand;
 
 #[tokio::main]
 async fn main() {
     let _ = dotenv(); // Load environment variables 
     let cors = CorsLayer::new().allow_origin(Any).allow_methods(Any);
+    let door_command = DoorCommand{id: rand::random::<u32>(), action: DoorAction::None};
 
     let latest = db::init().await;
     let app = Router::new()
         .route("/readings/latest", get(latest_handler))
         .route("/readings/submit", post(submit_handler))
         .route("/readings/history", get(history_handler))
+        .route("/commands/door/", get())
+        .route("/commands/door/ack", post())
         .fallback_service(ServeDir::new("../frontend/dist"))
         .with_state(latest)
         .layer(cors);
@@ -60,4 +64,16 @@ async fn history_handler(
         Ok(readings) => (StatusCode::OK, Json(readings)).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
+}
+
+async fn get_door(State(door): State<Door>) -> Json<DoorCommand> {
+    Json(door.lock().unwrap().clone())
+}
+
+async fn ack_door(State(door): State<Door>, Json(ack): Json<CommandAck>) -> StatusCode {
+    let mut cmd = door.lock().unwrap();
+    if cmd.id == ack.id {
+        *cmd = DoorCommand { id: 0, action: DoorAction::None };
+    }
+    StatusCode::OK
 }
