@@ -8,24 +8,32 @@ use shared::{DoorAction, DoorCommand, Reading};
 use sqlx::SqlitePool;
 use tower_http::services::ServeDir;
 use tower_http::cors::{Any, CorsLayer};
-use rand;
 
 #[tokio::main]
 async fn main() {
     let _ = dotenv(); // Load environment variables 
     let cors = CorsLayer::new().allow_origin(Any).allow_methods(Any);
-    let door_command = DoorCommand{id: rand::random::<u32>(), action: DoorAction::None};
+    let door = Arc::new(Mutex::new(DoorCommand::default()));
 
     let latest = db::init().await;
-    let app = Router::new()
+    let readings = Router::new()
         .route("/readings/latest", get(latest_handler))
         .route("/readings/submit", post(submit_handler))
         .route("/readings/history", get(history_handler))
-        .route("/commands/door/", get())
-        .route("/commands/door/ack", post())
-        .fallback_service(ServeDir::new("../frontend/dist"))
-        .with_state(latest)
-        .layer(cors);
+        .with_state(latest);
+
+    let commands = Router::new()
+    .route("/commands/door", get(get_door).post(set_door))
+    .route("/commands/door/ack", post(ack_door))
+    .with_state(door);
+
+    let app = Router::new()
+    .route("/", get(|| async { "Hello, World!" }))
+    .merge(readings)
+    .merge(commands)
+    .fallback_service(ServeDir::new("../frontend/dist"))
+    .layer(cors);;
+
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap(); // TODO: Bind to server port defined in config.toml?
 
@@ -66,14 +74,26 @@ async fn history_handler(
     }
 }
 
-async fn get_door(State(door): State<Door>) -> Json<DoorCommand> {
+async fn get_door(State(door): State<DoorCommand>) -> impl IntoResponse {
     Json(door.lock().unwrap().clone())
 }
 
-async fn ack_door(State(door): State<Door>, Json(ack): Json<CommandAck>) -> StatusCode {
+async fn set_door(State(door): State<DoorCommand>, Json(action): Json<DoorAction>,) -> impl IntoResponse {
+    let mut cmd = door.lock().unwrap();
+
+    let mut id = rand::random::<u32>();
+    while id == 0 || id == cmd.id { // Make SURE we don't collide
+        id = rand::random::<u32>();
+    }
+
+    *cmd = DoorCommand {id, action};
+    Json(cmd.clone())
+}
+
+async fn ack_door(State(door): State<DoorCommand>, Json(ack): Json<CommandAck>) -> StatusCode {
     let mut cmd = door.lock().unwrap();
     if cmd.id == ack.id {
-        *cmd = DoorCommand { id: 0, action: DoorAction::None };
+        *cmd = DoorCommand::default();
     }
     StatusCode::OK
 }

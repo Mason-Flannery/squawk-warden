@@ -7,14 +7,15 @@ pub struct Reading {
     pub humidity: f32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum DoorAction {
+    #[default]
     None,
     Open,
     Close,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DoorCommand {
     pub id: u32,
     pub action: DoorAction,

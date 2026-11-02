@@ -10,7 +10,7 @@
 use embassy_executor::{Spawner};
 use embassy_net::{dns::DnsSocket, tcp::client::{TcpClient, TcpClientState}};
 use embassy_time::{Duration, Timer, with_timeout};
-use esp_hal::clock::CpuClock;
+use esp_hal::{clock::CpuClock, gpio::Output};
 use esp_hal::timer::timg::TimerGroup;
 use esp_println;
 use reqwless::{client::HttpClient, headers::ContentType};
@@ -41,6 +41,7 @@ static STACK_RESOURCES: StaticCell<embassy_net::StackResources<3>> = StaticCell:
 const POLL_INTERVAL: Duration = Duration::from_secs(60);
 const RETRY_INTERVAL: Duration = Duration::from_secs(2);
 const NET_TIMEOUT: Duration = Duration::from_secs(5);
+const DOOR_PULSE: Duration = Duration::from_millis(500); // how long the "button press" lasts
 
 const SUBMIT_READING_ROUTE: &str = concat!(env!("SERVER_URL"), "/readings/submit");
 const GET_DOOR_COMMAND_ROUTE: &str = concat!(env!("SERVER_URL"), "/commands/door/");
@@ -118,7 +119,11 @@ async fn main(spawner: Spawner) -> ! {
     dht22_pin.set_output_enable(true);
     dht22_pin.set_high();
 
+    let open_opto = esp_hal::gpio::Output::new(peripherals.GPIO20, esp_hal::gpio::Level::Low, esp_hal::gpio::OutputConfig::default());
+    let close_opto = Output::new(peripherals.GPIO19, esp_hal::gpio::Level::Low, esp_hal::gpio::OutputConfig::default());
+
     spawner.spawn(dht_task(dht22_pin, &*tcp_client, &*dns_client).expect("Should work"));
+    spawner.spawn(door_poll_task(tcp_client, dns_client, open_opto, close_opto).expect("Should work"));
     loop {
         embassy_time::Timer::after_secs(1).await; // Yield control to let other tasks start
     }
@@ -211,52 +216,73 @@ async fn send_dht(
     Ok(())
 }
 
+#[embassy_executor::task]
 async fn door_poll_task(
     tcp_client: &'static TcpClient<'static, 1, 1500, 1500>,
     dns_socket: &'static DnsSocket<'static>,
-    rx_buf: &'static mut [u8],
+    mut open_opto: esp_hal::gpio::Output<'static>,
+    mut close_opto: esp_hal::gpio::Output<'static>,
 ) {
-    let last_command_id = 0;
-    // define id guard? store last issued id and if the server has a duplicate, skip action and then ack that it was done? this state protects signal drops mid-op
+    // Option so that id 0 is still a valid command id
+    let mut last_command_id: Option<u32> = None;
+    let mut rx_buf = [0u8; 4096];
+
+    // Make sure both optos start off
+    open_opto.set_low();
+    close_opto.set_low();
+
     let mut client = HttpClient::new(tcp_client, dns_socket);
+
     loop {
-        // Make a get request to get the command json
-        let door_future = fetch_door_command(&mut client, rx_buf);
-        let command = match with_timeout(NET_TIMEOUT, door_future).await {
-            Ok(Ok(command)) => {
-                esp_println::println!("GET successful");
-                command
-            },
+        let command = match with_timeout(NET_TIMEOUT, fetch_door_command(&mut client, &mut rx_buf)).await {
+            Ok(Ok(command)) => command,
             Ok(Err(_)) => {
                 esp_println::println!("HTTP get failed :(");
                 Timer::after(POLL_INTERVAL).await;
                 continue;
-            },
+            }
             Err(_) => {
                 esp_println::println!("Request timed out");
                 Timer::after(POLL_INTERVAL).await;
                 continue;
-            },
+            }
         };
-        
-        match command.action {
-            shared::DoorAction::None => (),
-            shared::DoorAction::Open => {
-                // Open logic
 
-                ack_door_command(&mut client, command.id, rx_buf).await;
-            },
-            shared::DoorAction::Close => {
-                // Close logic
-
-                ack_door_command(&mut client, command.id, rx_buf).await;
-            },
+        // Nothing to do
+        if matches!(command.action, shared::DoorAction::None) {
+            Timer::after(POLL_INTERVAL).await;
+            continue;
         }
 
-        // Ack server
+        if last_command_id == Some(command.id) {
+            // Already attempted this one (e.g. our ack got lost). Don't touch the door, just re-ack.
+            esp_println::println!("Command {} already executed, re-acking", command.id);
+        } else {
+            match command.action {
+                shared::DoorAction::Open => pulse(&mut open_opto, DOOR_PULSE).await,
+                shared::DoorAction::Close => pulse(&mut close_opto, DOOR_PULSE).await,
+                shared::DoorAction::None => unreachable!(),
+            }
+            // Record BEFORE acking so a failed ack can never cause a second actuation
+            last_command_id = Some(command.id);
+        }
+
+        match with_timeout(NET_TIMEOUT, ack_door_command(&mut client, command.id, &mut rx_buf)).await {
+            Ok(Ok(())) => esp_println::println!("Ack sent for {}", command.id),
+            // Not fatal: the server will resend the command and we'll re-ack next poll
+            Ok(Err(_)) => esp_println::println!("Ack failed, will retry next poll"),
+            Err(_) => esp_println::println!("Ack timed out, will retry next poll"),
+        }
 
         Timer::after(POLL_INTERVAL).await;
     }
+}
+
+/// Drive an optocoupler LED for `duration`, emulating a button press.
+async fn pulse(pin: &mut Output<'static>, duration: Duration) {
+    pin.set_high();
+    Timer::after(duration).await;
+    pin.set_low();
 }
 
 async fn fetch_door_command(
